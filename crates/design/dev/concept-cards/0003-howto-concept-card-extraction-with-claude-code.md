@@ -2,6 +2,8 @@
 
 A practical guide to the mechanics and best practices for creating high-quality concept cards from primary source material.
 
+> **Note:** The extraction prompt template (`cc-extraction-prompt-template-v2.md`) is the operational entry point for each source extraction. It orchestrates reading order across all section documents.
+
 ---
 
 ## What Are Concept Cards?

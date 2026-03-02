@@ -6,6 +6,8 @@
 
 Sources are organised into waves by strategic value. Each wave should be fully extracted, validated, and ingested into the graph DB before the next wave begins.
 
+**Source assessment protocol.** For any source not listed below, perform a source assessment (see extraction prompt template, Phase 0.5) before beginning extraction. Document: OCR quality, prose style, structural features, key chapters, estimated card count, and recommended agent architecture. Save assessment notes in the post-mortem.
+
 #### Wave 1 — Immediate Practical Impact (Free + Critical Paid)
 
 These sources provide the fastest path to usable knowledge for the target user.
@@ -75,3 +77,5 @@ These are continuously updated resources that should be revisited periodically.
 **Bringhurst** — Extremely rich but print-focused. Extract the principles and proportional systems; flag any concept that is specifically about print composition and note its web equivalent (or lack thereof) in Context & Application.
 
 **Every Layout** — The 13 layout primitives map directly to concept cards. The philosophy ("composition over inheritance") maps to a design-principles card. Each primitive has clear prerequisites, construction steps, and use cases. This source is unusually well-suited to our card format.
+
+**Munsell Color System** (Cleland, *A Practical Description of the Munsell Color System*) — ~20 pages, 19 cards. OCR quality: poor in Chapter 8 (Balance), with repeated text blocks around worked examples. Prose style: 1920s discursive narrative; definitions embedded in flowing text with no section headings or bullet lists. Extraction requires careful close-reading. Key chapters: 4-9 (Hue, Value, Chroma, Complementary Colours, Balance). Architecture: serial extraction (under 25 cards). Categories: primarily `colour-theory` with some `visual-perception`. Tiers: primarily foundational.

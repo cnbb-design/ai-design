@@ -54,6 +54,8 @@ These notes address structural tensions an ontology engineer would flag:
 
 5. **Data Visualisation breadth**: Data vis is an entire field; we cannot be exhaustive. Resolution: Focus extraction on the perceptual foundations (encoding effectiveness, preattentive processing applied to charts) and the design-system integration aspects (charting as component, colour in data vis). Defer specialised statistical graphics to a future extension.
 
+6. **Generic vs. source-specific concepts.** Universal concepts (hue, chroma, value, complementary colours) exist independently of any particular colour system or theorist. Source-specific concepts (Munsell's notation system, Itten's seven contrasts, Albers's transparency exercises) are contributions of a particular source. During extraction, use generic slugs for universal concepts and source-prefixed slugs for source-specific constructs. The test: "Would this concept exist with the same definition outside this particular system?" If yes → generic slug. If no → source-prefixed slug. Multiple sources defining the same generic concept is expected and will be reconciled during harmonisation.
+
 ### 2.3 Cross-Cutting Concept Cards
 
 The following concepts should be extracted as standalone cards in `design-principles` with `related` links across multiple categories. These are the "theorems" of visual design — they derive from Layer 0 perception science and govern all Layer 2 domain knowledge:

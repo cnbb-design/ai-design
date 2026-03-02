@@ -153,3 +153,30 @@ log[p(b)/p(a)] = -α × (|b|/|a| - 1)
 [L,M,S]ᵀ = M₂ × [X,Y,Z]ᵀ     # XYZ to LMS
 [l,a,b]  = f(∛L, ∛M, ∛S)       # LMS to Oklab (cube root + matrix)
 ```
+
+### 5.6 Slug Naming Conventions
+
+```
+# Generic slugs — for universal concepts
+hue                        # The concept of hue exists across all colour systems
+chroma                     # Munsell uses it, OKLCH uses it, it's universal
+complementary-colours      # Universal relationship
+visual-hierarchy           # Universal design principle
+modular-type-scale         # Universal typographic technique
+
+# Source-prefixed slugs — for system-specific constructs
+munsell-hue-circle         # Munsell's specific 5-principal-hue, 100-step circle
+munsell-notation           # The H V/C notation system
+munsell-colour-solid       # The specific 3D model
+itten-seven-contrasts      # Itten's specific classification
+albers-transparency        # Albers's specific exercise/principle
+
+# The test
+# Ask: "Would this concept exist with the same definition outside this system?"
+# YES → generic slug
+# NO  → source-prefixed slug
+
+# Boundary case: when a source gives a specific definition to a universal concept
+# Use the generic slug, document the source-specific definition in the card body
+# The harmonisation phase reconciles multiple definitions
+```

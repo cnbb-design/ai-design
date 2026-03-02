@@ -17,6 +17,8 @@ After each extraction wave, verify:
 - [ ] High-priority CQs (Section 4.4) have MULTIPLE cards contributing to the answer
 - [ ] No CQ requires concepts that haven't been extracted yet (or flag as "Wave N dependency")
 
+Note: CQ coverage is validated **across sources**, not within a single source. No single source is expected to cover all 55 CQs. After each extraction, generate a CQ coverage report showing which CQs are now answered. Maintain a cumulative tracker at `concept-cards/cq-coverage-tracker.md` that maps each CQ to the cards (across all sources) that answer it.
+
 ### 10.3 Rosetta Stone Coverage
 
 - [ ] Every RIGOROUS mapping in Section 7.3 is reflected in at least one concept card's `rosetta_stone` field
@@ -30,3 +32,17 @@ After each extraction wave, verify:
 - [ ] Layer 2 concepts may depend on Layers 0 and 1
 - [ ] Layer 3 concepts may depend on any layer
 - [ ] No circular dependencies exist within a layer
+
+### 10.5 Cross-Source Slug Tracking
+
+After each extraction, update `concept-cards/slug-registry.txt` — a flat file listing every slug, its source, and whether it's generic or source-prefixed:
+
+```
+hue                     munsell-source    generic
+value                   munsell-source    generic
+chroma                  munsell-source    generic
+munsell-hue-circle      munsell-source    source-prefixed
+munsell-notation        munsell-source    source-prefixed
+```
+
+This registry enables the harmonisation phase to quickly identify which concepts appear across multiple sources and need reconciliation.
