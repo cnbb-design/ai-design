@@ -61,6 +61,8 @@ deno run --allow-read --allow-write --allow-net --allow-env server.js
 
 **Deny flags always override allow**: `--allow-net --deny-net=evil.com` permits all network except `evil.com`.
 
+**Special caution**: `--allow-run` is the most dangerous permission — spawned subprocesses escape the Deno sandbox entirely and run with full system access. `--allow-ffi` is similarly dangerous (native code runs at full process privilege). Both should be scoped to specific executables/libraries when possible.
+
 **Rationale**: Broad permissions (`--allow-read` with no path) grant access to the entire filesystem. Narrow permissions limit blast radius — a compromised dependency can only access what the program was granted (Deno permissions docs).
 
 ---
@@ -149,10 +151,10 @@ console.log(info.size, info.mtime);
 **Summary**: `Deno.serve()` is the modern HTTP server API. It uses standard Web API `Request`/`Response` types.
 
 ```js
-// Good — minimal server
+// Good — minimal server (handler only, defaults to port 8000)
 Deno.serve((_req) => new Response("Hello, World!"));
 
-// Good — with options
+// Good — with options (options first, handler second)
 Deno.serve({ port: 8080, hostname: "0.0.0.0" }, (req) => {
   const url = new URL(req.url);
   if (url.pathname === "/api/health") {
@@ -176,19 +178,11 @@ Deno.serve((_req) => {
     headers: { "content-type": "text/plain" },
   });
 });
-
-// Good — WebSocket upgrade
-Deno.serve((req) => {
-  if (req.headers.get("upgrade") === "websocket") {
-    const { socket, response } = Deno.upgradeWebSocket(req);
-    socket.onmessage = (e) => socket.send(`Echo: ${e.data}`);
-    return response;
-  }
-  return new Response("Not a WebSocket request", { status: 400 });
-});
 ```
 
-**Key features**: HTTP/1.1 and HTTP/2 automatic, auto-compression (gzip/brotli), HTTPS via `cert`/`key` options, streaming bodies. Requires `--allow-net`.
+**Signatures**: `Deno.serve(handler)` or `Deno.serve(options, handler)`. Options first, handler second.
+
+**Key features**: HTTP/1.1 and HTTP/2 automatic, auto-compression (gzip/brotli), HTTPS via `cert`/`key` options, streaming bodies, WebSocket upgrade via `Deno.upgradeWebSocket(req)`. Requires `--allow-net`.
 
 **Rationale**: `Deno.serve()` replaces the older `Deno.listen()` + manual request handling pattern. It uses the same `Request`/`Response` types as `fetch()`, making server and client code symmetrical (Deno HTTP server docs).
 
@@ -335,9 +329,11 @@ const response = await fetch("https://api.example.com/users", {
 | Workers | `Worker` (module type only) |
 | WebSocket | `WebSocket` |
 | Console | `console.log/warn/error/table/time/timeEnd` |
-| Storage | `localStorage`, `sessionStorage` |
+| Storage | `localStorage`*, `sessionStorage`* |
 | Cache | `CacheStorage`, `Cache` (partial) |
 | Channel | `BroadcastChannel` |
+
+*`localStorage` in Deno differs from browsers: it is persisted to disk (not in-memory), scoped by the main module path (not by origin), and has a 10 MB limit. `sessionStorage` is per-execution (cleared when the process exits). Neither requires `--allow-read`/`--allow-write`.
 
 **Rationale**: Using Web Platform APIs makes code portable between Deno and browsers. Deno deviates from browser behavior only where server-side semantics require it (no DOM, no CORS, `localStorage` scoped by module path) (Deno Web Platform API docs).
 
@@ -372,7 +368,11 @@ const config = JSON.parse(await Deno.readTextFile(configUrl));
 const workerUrl = import.meta.resolve("./worker.js");
 ```
 
-**Rationale**: `import.meta.main` is Deno's way to detect whether a module is the entry point — use it instead of `if (require.main === module)`. `import.meta.dirname` and `import.meta.filename` replace Node's `__dirname` and `__filename`. `import.meta.resolve()` resolves specifiers relative to the current module (Deno namespace docs; Exploring JS Ch. 29).
+**Note**: `import.meta.dirname` and `import.meta.filename` are `undefined` for remote modules. Use `new URL("./path", import.meta.url)` for portable resolution that works with both local and remote modules.
+
+**Replaces Node.js**: `import.meta.main` → `require.main === module`, `import.meta.dirname` → `__dirname`, `import.meta.filename` → `__filename`.
+
+**Rationale**: `import.meta.main` is Deno's way to detect whether a module is the entry point. `import.meta.dirname` and `import.meta.filename` replace Node's `__dirname` and `__filename`. `import.meta.resolve()` resolves specifiers relative to the current module (Deno namespace docs; Exploring JS Ch. 29).
 
 ---
 
@@ -469,7 +469,7 @@ import { login } from "@auth/mod.js";
 ```
 
 ```js
-// @ts-check (alternative: per-file opt-in without deno.json)
+// @ts-check — per-file opt-in (use this when checkJs is NOT set globally in deno.json)
 
 /**
  * @param {string} name
@@ -598,7 +598,7 @@ deno check --all main.js
 deno run --check main.js
 ```
 
-**Commands that type-check by default**: `deno test`, `deno bench`, `deno compile`.
+**Commands that type-check by default**: `deno compile`, `deno publish`. `deno test` and `deno bench` type-checked by default in Deno 1.x but may skip type-checking in Deno 2.x for performance parity with `deno run` — check your Deno version's behavior.
 **Commands that do NOT type-check**: `deno run` (for performance), `deno eval`, `deno repl`.
 
 **Rationale**: Separating type-checking from execution is a deliberate performance decision. Run `deno check` in CI as a gate; use `deno run` (no check) for fast development iteration. For JS files, enable `"checkJs": true` in `deno.json` or add `// @ts-check` per file (Deno TypeScript docs).
@@ -743,8 +743,8 @@ import { delay } from "@std/async";
 **Summary**: Deno uses ESM exclusively. There is no `require()`, no `module.exports`, no CommonJS.
 
 ```js
-// Good — ESM
-import { readFile } from "node:fs/promises";
+// Good — ESM with Deno APIs
+const data = await Deno.readTextFile("./input.txt");
 export function process(data) { /* ... */ }
 
 // Bad — CommonJS (does not work in Deno modules)
@@ -758,27 +758,23 @@ module.exports = { process }; // ReferenceError: module is not defined
 
 ---
 
-## ID-27: `import.meta.dirname` and `import.meta.filename` Replace `__dirname`/`__filename`
+## ID-27: No `__dirname` / `__filename` — Use `import.meta`
 
 **Strength**: SHOULD
 
-**Summary**: Deno provides `import.meta.dirname` and `import.meta.filename` as direct replacements for Node's `__dirname` and `__filename`.
+**Summary**: `__dirname` and `__filename` are CommonJS globals that don't exist in Deno. See ID-12 for the `import.meta` replacements.
 
 ```js
-// Good — Deno
-console.log(import.meta.filename); // "/home/user/project/main.js"
-console.log(import.meta.dirname);  // "/home/user/project"
+// Node.js (does not work in Deno)
+const dir = __dirname;      // ReferenceError
+const file = __filename;    // ReferenceError
 
-// Build a path relative to the current file
-const configPath = `${import.meta.dirname}/config.json`;
-
-// For URL-based resolution (works with remote modules too)
-const configUrl = new URL("./config.json", import.meta.url);
+// Deno — see ID-12 for full examples
+const dir = import.meta.dirname;
+const file = import.meta.filename;
 ```
 
-**Note**: `import.meta.dirname` and `import.meta.filename` are `undefined` for remote modules (HTTPS imports). Use `import.meta.url` with `new URL()` for portable path resolution that works with both local and remote modules.
-
-**Rationale**: `__dirname` and `__filename` are CommonJS globals that don't exist in ESM. Deno provides `import.meta.dirname` and `import.meta.filename` as the direct replacements (Deno namespace docs).
+**See also**: ID-12 for the complete `import.meta` reference including `.main`, `.url`, `.resolve()`, and the remote-module caveat.
 
 ---
 
@@ -890,7 +886,7 @@ try {
 | 24 | `deno compile` | CONSIDER | Single binary; cross-compile; embedded permissions |
 | 25 | `@std/*` standard library | SHOULD | On JSR; independently versioned; not bundled |
 | 26 | No `require()` | MUST | ESM only; CJS only in .cjs or npm packages |
-| 27 | `import.meta.dirname`/`.filename` | SHOULD | Replaces `__dirname`/`__filename` |
+| 27 | No `__dirname`/`__filename` | SHOULD | Use `import.meta` — see ID-12 |
 | 28 | No `process` global | SHOULD | Use `Deno.env`, `Deno.args`, `Deno.exit()` |
 | 29 | No `Buffer` | SHOULD | Use `Uint8Array` + `TextEncoder`/`TextDecoder` |
 | 30 | `Deno.errors.*` | CONSIDER | Structured error classes for `instanceof` checks |
