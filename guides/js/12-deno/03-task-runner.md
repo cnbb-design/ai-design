@@ -70,9 +70,9 @@ Available tasks:
 | Operator | Meaning | Example |
 |----------|---------|---------|
 | `&&` | Sequential, stop on error | `deno lint && deno test` |
-| `\|\|` | Fallback on error | `cmd1 \|\| cmd2` |
+| `x \|\| y` | Fallback on error | Run y if x fails |
 | `;` | Sequential, always continue | `cmd1 ; cmd2` |
-| `\|` | Pipe stdout | `deno doc \| grep export` |
+| `x \| y` | Pipe stdout | Pipe x's output to y |
 | `&` | Background execution | `cmd1 & cmd2` |
 | `>` / `>>` | Redirect stdout | `deno coverage --lcov > cov.lcov` |
 | `2>` | Redirect stderr | `cmd 2> errors.log` |
@@ -159,7 +159,7 @@ deno task dev
 }
 ```
 
-**Rationale**: `--allow-all` is acceptable for test tasks because tests often need file, network, and env access for integration testing. For production `run` tasks, use granular permissions (ID-01). `--watch` for continuous testing during development; `--coverage` for CI (Deno test runner docs).
+**Rationale**: Tests commonly use `--allow-all` because test suites touch files, network, and env vars across many tests. This is acceptable since tests are not production code. For tighter control, use per-test `permissions` to restrict access within individual tests — see `12-deno/02-testing.md` ID-03. For production `run` tasks, always use granular permissions (ID-01). `--watch` for continuous testing during development; `--coverage` for CI (Deno test runner docs).
 
 **See also**: `12-deno/02-testing.md` ID-01, ID-14, ID-21
 
@@ -234,7 +234,7 @@ deno task check
 - `biome check --write` — lint with auto-fix + format
 - `biome format --write` — format only
 
-**Rationale**: Biome combines linting and formatting in one tool and is ~35x faster than Prettier. The project uses Biome via `biome.json` — `deno lint`/`deno fmt` sections in `deno.json` should be omitted to avoid confusion. See `13-biome/01-setup.md` for Biome configuration.
+**Rationale**: Biome combines linting and formatting in one tool and is significantly faster than Prettier (an order of magnitude in most benchmarks). The project uses Biome via `biome.json` — `deno lint`/`deno fmt` sections in `deno.json` should be omitted to avoid confusion. See `13-biome/01-setup.md` for Biome configuration.
 
 ---
 
@@ -400,26 +400,36 @@ deno info --json main.js
 
 ---
 
-## ID-15: `deno install` — Dependency Caching and Global Scripts
+## ID-15: `deno install` — Two Distinct Uses
 
 **Strength**: CONSIDER
 
-**Summary**: Pre-cache dependencies for faster startup, or install scripts as global CLI commands.
+**Summary**: `deno install` has two different modes: dependency caching and global script installation.
+
+**Use 1: Dependency caching** (project-level)
 
 ```sh
-# Pre-cache all dependencies (useful in Docker builds)
+# Pre-cache all dependencies for an entry point (no execution)
 deno install --entrypoint main.js
 
-# Install dependencies from deno.json
+# Install dependencies listed in deno.json
 deno install
-
-# Install a remote script as a global command
-deno install -g -n serve https://deno.land/std/http/file_server.ts
 ```
 
 **Docker pattern**: Copy `deno.json` and `deno.lock` first, run `deno install --entrypoint main.js` to cache deps as a Docker layer, then copy source — dep caching survives source changes.
 
-**Rationale**: `deno install --entrypoint` pre-populates the module cache without executing the script. In Docker, this creates a cacheable layer for dependencies (Deno install docs; Deno Docker docs).
+**Use 2: Global script installation** (CLI tools)
+
+```sh
+# Install a remote script as a global CLI command
+deno install -g -n serve https://deno.land/std/http/file_server.ts
+
+# The script is now available as: serve
+```
+
+Permission flags passed at install time (`--allow-net`, etc.) are embedded into the generated wrapper command.
+
+**Rationale**: These are two unrelated operations sharing a command name. Use 1 (`deno install --entrypoint`) pre-populates the module cache for faster startup and Docker layer caching. Use 2 (`deno install -g`) creates a global executable wrapper (Deno install docs; Deno Docker docs).
 
 ---
 
@@ -447,7 +457,7 @@ deno install -g -n serve https://deno.land/std/http/file_server.ts
 | Operator | Behavior |
 |----------|----------|
 | `&&` | Run next only if previous succeeded (exit 0) |
-| `\|\|` | Run next only if previous failed (non-zero exit) |
+| `x \|\| y` | Run y only if x failed (non-zero exit) |
 | `;` | Always run next, regardless of previous exit code |
 | `&` | Run in background (both commands execute in parallel) |
 
@@ -491,7 +501,7 @@ deno install -g -n serve https://deno.land/std/http/file_server.ts
 }
 ```
 
-**Rationale**: Composing from named tasks keeps each task focused and reusable. The `check` task chains three independent tasks — each can also be run individually. The trade-off is subprocess overhead per `deno task` invocation (Deno task docs).
+**Rationale**: Composing from named tasks keeps each task focused and reusable. The `check` task chains three independent tasks — each can also be run individually. The trade-off is subprocess overhead: each `deno task` invocation spawns a child process. For CI where speed matters, the inline version (ID-07: `"check": "biome ci && deno check **/*.js && deno test --allow-all"`) is faster because it avoids three extra process spawns (Deno task docs).
 
 ---
 
@@ -571,19 +581,22 @@ deno eval "[1,2,3].values().map(x=>x*2).toArray()"
 
 **Strength**: CONSIDER
 
-**Summary**: Exclude files or directories from triggering `--watch` restarts.
+**Summary**: Without `--watch-exclude`, generated files trigger an infinite restart loop.
 
-```jsonc
-{
-  "tasks": {
-    "dev": "deno run --watch --watch-exclude='*.log,tmp/,cov/' --allow-net main.js"
-  }
-}
+```sh
+# The problem: server writes to access.log → watcher detects change → restart →
+# server writes to access.log again → watcher detects change → restart → ...
+
+# Bad — no exclusions, restart loop if server generates output files
+deno run --watch --allow-net --allow-write server.js
+
+# Good — exclude generated files
+deno run --watch --watch-exclude='*.log,tmp/,cov/,dist/' --allow-net --allow-write server.js
 ```
 
-**Common exclusions**: Log files (`*.log`), temp directories (`tmp/`), coverage output (`cov/`), generated files, and `.git/`.
+**Common exclusions**: Log files (`*.log`), temp directories (`tmp/`), coverage output (`cov/`), build output (`dist/`), and `.git/`.
 
-**Rationale**: Without exclusions, generated files (logs, coverage reports) can trigger restart loops. `--watch-exclude` accepts glob patterns (Deno run docs).
+**Rationale**: `--watch` monitors all files in the project. If the running program writes files (logs, temp files, build output), those writes trigger a restart, which writes again — an infinite loop. `--watch-exclude` accepts glob patterns to break the cycle. See also ID-05 which shows `--watch-exclude` in a task definition (Deno run docs).
 
 ---
 
