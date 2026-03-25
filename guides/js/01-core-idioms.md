@@ -241,14 +241,16 @@ export default function formatDate(d) { /* ... */ }
 **Summary**: Use ECMAScript modules exclusively. Never use `require()`, `module.exports`, or `exports`.
 
 ```js
-// Good — ESM with Deno APIs
-const data = await Deno.readTextFile("./config.json");
+// Good — ESM with Deno APIs and standard library
 import { formatDate } from "./utils.js";
+import { join } from "@std/path";
 
+const data = await Deno.readTextFile(join("config", "app.json"));
 export function processData(input) { /* ... */ }
 
 // Bad — CommonJS / Node.js
 const { readFile } = require("fs/promises");
+const { join } = require("path");
 module.exports = { processData };
 ```
 
@@ -940,10 +942,13 @@ for (const item of items) {
 
 ## Related Guidelines
 
-- **Error Handling**: See `02-error-handling.md` for `try`/`catch`, custom errors, and Result patterns
-- **Async Patterns**: See `07-async-patterns.md` for Promises, `async`/`await`, and concurrency
-- **Classes and Objects**: See `04-classes-objects.md` for class design, private fields, and inheritance
-- **Functions**: See `03-functions.md` for closures, higher-order functions, and composition
+- **Error Handling**: See `03-error-handling.md` for `try`/`catch`, custom errors, and Result patterns
+- **Values & References**: See `04-values-references.md` for mutation discipline, copying, and immutability
+- **Functions & Closures**: See `06-functions-closures.md` for closures, higher-order functions, and composition
+- **Async & Concurrency**: See `07-async-concurrency.md` for Promises, `async`/`await`, and concurrency
+- **Anti-Patterns**: See `09-anti-patterns.md` for common JavaScript footguns
+- **Deno**: See `12-deno/01-runtime-basics.md` for Deno permissions, APIs, and configuration
+- **No-Node Boundary**: See `14-no-node-boundary.md` for what "no Node.js" means in practice
 
 ---
 
