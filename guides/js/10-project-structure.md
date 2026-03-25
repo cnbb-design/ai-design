@@ -155,6 +155,8 @@ Auth/
   AuthTest.js
 ```
 
+**Exception**: Test files use `*_test.js` (underscore) per Deno convention (ID-07). The underscore separates the module name from the `test` suffix and matches Deno's test runner auto-discovery pattern.
+
 **Rationale**: kebab-case is the Deno and web ecosystem convention for file names. It avoids case-sensitivity issues across operating systems (macOS is case-insensitive by default, Linux is not). Class names are PascalCase inside the file, not in the filename (Exploring JS Ch. 9).
 
 **See also**: `01-core-idioms.md` ID-12
@@ -264,6 +266,8 @@ my-app/
     └── ...
 ```
 
+**Note**: `mod.js` is the convention, but the `exports` field in `deno.json` is the actual mechanism that controls what consumers can import. The entry point can technically be any filename — `exports` is what the package registry and runtime resolve. `mod.js` is conventional because it is self-documenting and widely recognized in the Deno ecosystem.
+
 **Rationale**: Deno uses `mod.js` (or `mod.ts`) as the conventional entry point for libraries, replacing Node.js's `index.js`. The `exports` field in `deno.json` makes this explicit for the package registry. `main.js` is the conventional name for application entry points — the file you pass to `deno run`.
 
 ---
@@ -309,6 +313,8 @@ import { hashPassword } from "./auth/password.js";
 import { validateToken } from "./auth/session.js";
 ```
 
+**Enforcement levels**: For published packages, the `exports` field in `deno.json` controls what's importable — deep imports into unexported paths are rejected by the runtime. For internal project code (not published), this is an organizational convention enforced by code review, not by tooling.
+
 **Rationale**: Deep imports create tight coupling to internal file structure. Renaming or reorganizing internal files breaks every consumer. A barrel file (`mod.js`) provides a stable public API that can be refactored behind without breaking imports. The exception is within the feature directory itself, where direct imports between sibling files are expected.
 
 ---
@@ -346,19 +352,31 @@ auth/login.js       → imports from users/repository.js ✗ (cross-feature)
 **Summary**: ESM circular imports cause bindings to be `undefined` at access time. They are a signal of poor module decomposition.
 
 ```js
-// Anti-pattern — circular import
+// Anti-pattern — circular import with const (throws ReferenceError)
 // a.js
 import { b } from "./b.js";
 export const a = `a-${b}`;
 
 // b.js
 import { a } from "./a.js";
-export const b = `b-${a}`;  // a is undefined here! circular initialization
+export const b = `b-${a}`;  // ReferenceError: Cannot access 'a' before initialization
 
-// Result: b === "b-undefined", a === "a-b-undefined"
+// With var instead of const — silently produces wrong values (no error)
+// a.js
+import { b } from "./b.js";
+export var a = `a-${b}`;
+
+// b.js
+import { a } from "./a.js";
+export var b = `b-${a}`;    // a is undefined — b becomes "b-undefined"
+// Then a becomes "a-b-undefined" — silently wrong
 ```
 
-**Why it happens**: ESM resolves the module graph before execution. When A imports B and B imports A, the engine creates binding slots for all exports during the linking phase. But when B's top-level code runs and reads `a`, A's code hasn't executed yet — the binding exists but its value is `undefined` (for `var`) or throws `ReferenceError` (for `let`/`const`).
+**Why it happens**: ESM resolves the module graph before execution. When A imports B and B imports A, the engine creates binding slots for all exports during the linking phase. But when B's top-level code runs and reads `a`, A's code hasn't executed yet. The behavior depends on the declaration:
+- **`const`/`let`/`class`**: The binding is in the Temporal Dead Zone — accessing it throws `ReferenceError`
+- **`var`/`function`**: The binding exists and is hoisted to `undefined` (for `var`) or the function body (for `function`) — producing silently wrong values instead of throwing
+
+The `const` case is actually safer because it throws immediately. The `var` case is more dangerous because it silently produces `undefined`-contaminated values.
 
 **How to fix**: Extract the shared dependency into a third module.
 
@@ -449,16 +467,8 @@ shared/
   "tasks": {
     "dev": "deno run --watch --allow-net --allow-read main.js",
     "test": "deno test --allow-all",
-    "check": "deno fmt --check && deno lint && deno test --allow-all",
+    "check": "deno test --allow-all",
     "bench": "deno bench"
-  },
-  "lint": {
-    "include": ["**/*.js"],
-    "rules": { "tags": ["recommended"] }
-  },
-  "fmt": {
-    "lineWidth": 100,
-    "singleQuote": true
   },
   "compilerOptions": {
     "checkJs": true,
@@ -467,7 +477,9 @@ shared/
 }
 ```
 
-**Rationale**: `deno.json` replaces `package.json`, `tsconfig.json`, `.eslintrc`, and `.prettierrc` in a single file. Accepts `.jsonc` (comments allowed). Auto-detected by walking up the directory tree. Centralizing config eliminates the "which of these 7 config files controls X?" problem.
+**Note on lint/fmt**: This example omits `lint` and `fmt` fields because the lykn project uses **Biome** for linting and formatting (configured in `biome.json`), not Deno's built-in tools. If your project uses Deno's built-in linter/formatter instead of Biome, add `lint` and `fmt` sections here. See `13-biome/01-setup.md` for Biome configuration.
+
+**Rationale**: `deno.json` replaces `package.json` and `tsconfig.json` in a single file. When using Biome, it also eliminates `.eslintrc` and `.prettierrc` — Biome handles those in `biome.json`. Accepts `.jsonc` (comments allowed). Auto-detected by walking up the directory tree. Centralizing config eliminates the "which of these 7 config files controls X?" problem.
 
 ---
 
@@ -674,17 +686,22 @@ import { createMockUser } from "../testing/helpers.js";
 
 **Strength**: CONSIDER
 
-**Summary**: Use `deno vendor` to download all remote dependencies locally for air-gapped or reproducible builds.
+**Summary**: Use `"vendor": true` in `deno.json` to download all remote dependencies locally for air-gapped or reproducible builds.
+
+```json
+// deno.json — enable vendoring
+{
+  "vendor": true
+}
+```
 
 ```sh
-# Vendor all dependencies
-deno vendor
-
-# Subsequent runs use vendor/ automatically — no network needed
+# With "vendor": true, Deno downloads dependencies to vendor/ automatically
+# Subsequent runs use vendor/ — no network needed
 deno test --allow-all
 ```
 
-**Rationale**: Vendoring creates a self-contained project that builds without network access. Useful for air-gapped environments, auditing third-party code, and CI pipelines where registry availability is unreliable. The trade-off is repository size — vendored dependencies can be large.
+**Rationale**: Vendoring creates a self-contained project that builds without network access. Setting `"vendor": true` in `deno.json` is the recommended approach in Deno 2.x — it automatically manages the `vendor/` directory on module resolution. Useful for air-gapped environments, auditing third-party code, and CI pipelines where registry availability is unreliable. The trade-off is repository size.
 
 ---
 
@@ -727,8 +744,6 @@ project/
 - `deno test`, `deno lint`, `deno fmt` run across all members from the root
 
 **Rationale**: Workspaces enable shared configuration, independent versioning, and cross-member imports without path gymnastics. Use them when a project has distinct publishable packages or clearly separated concerns that benefit from independent dependency management.
-
----
 
 ---
 
