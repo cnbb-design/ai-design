@@ -246,6 +246,8 @@ function loadConfig(path) {
 
 **Rationale**: `Promise.try()` calls the callback immediately (same tick) unlike `Promise.resolve().then(cb)` which defers to a microtask. It ensures uniform error handling at the start of a chain (Exploring JS Ch. 43).
 
+**Availability**: `Promise.try()` is ES2025 and very recent. Verify Deno support with `deno eval "Promise.try(() => 42).then(console.log)"` before relying on it. `Promise.withResolvers()` (ID-07, ES2024) and top-level `await` (ID-10, ES2022) have broader runtime support.
+
 ---
 
 ## ID-09: Wrapping Callback APIs with `new Promise()` — Promisification
@@ -261,13 +263,14 @@ function delay(ms) {
 }
 await delay(1000);
 
-// Good — promisified event-based API
-function waitForEvent(target, eventName) {
-  return new Promise((resolve) => {
-    target.addEventListener(eventName, resolve, { once: true });
+// Good — promisified event-based API with error handling
+function waitForConnection(socket) {
+  return new Promise((resolve, reject) => {
+    socket.addEventListener("open", resolve, { once: true });
+    socket.addEventListener("error", reject, { once: true });
   });
 }
-const event = await waitForEvent(button, "click");
+await waitForConnection(ws);
 
 // Bad — wrapping an already-async function (anti-pattern)
 function bad(url) {
@@ -442,14 +445,20 @@ For error handling (AggregateError on total failure), see `03-error-handling.md`
 
 ---
 
-## ID-16: `Promise.race()` for Timeout Patterns
+## ID-16: `Promise.race()` for First-Settlement Patterns
 
 **Strength**: SHOULD
 
-**Summary**: Settles with the first Promise to settle — fulfillment or rejection. Use it to implement timeouts.
+**Summary**: Settles with the first Promise to settle — fulfillment or rejection. Useful for first-response-wins and legacy timeout patterns.
 
 ```js
-// Good — timeout pattern
+// Good — first response wins from multiple sources
+const fastest = await Promise.race([
+  fetch("https://api-east.example.com/data"),
+  fetch("https://api-west.example.com/data"),
+]);
+
+// Good — legacy timeout pattern (prefer AbortSignal.timeout() for new code — see ID-26)
 function withTimeout(ms, promise) {
   return Promise.race([
     promise,
@@ -459,14 +468,14 @@ function withTimeout(ms, promise) {
   ]);
 }
 
-const data = await withTimeout(5000, fetch("/api/slow-endpoint"));
-
 // Gotcha: Promise.race([]) never settles — always pass at least one input
 ```
 
-**Key behavior**: The losing Promises continue running — `Promise.race()` has no cancellation mechanism. For true cancellation, combine with `AbortController` (ID-24).
+**Key behavior**: The losing Promises continue running — `Promise.race()` has no cancellation mechanism. For timeouts with true cancellation, use `AbortSignal.timeout()` (ID-26) instead.
 
-**Rationale**: `Promise.race()` reacts to the first settlement regardless of type. Contrast with `Promise.any()` which reacts only to fulfillments. The timeout pattern is the canonical use case (Exploring JS Ch. 43; JS Definitive Guide, §13.2.5).
+**Note**: For most timeout use cases, `AbortSignal.timeout()` (ID-26) is the modern replacement — it integrates with `fetch()` and other Web APIs, and actually cancels the operation rather than just ignoring the result.
+
+**Rationale**: `Promise.race()` reacts to the first settlement regardless of type. Contrast with `Promise.any()` which reacts only to fulfillments. Its primary modern use case is first-response-wins patterns; for timeouts, `AbortSignal.timeout()` is preferred (Exploring JS Ch. 43; JS Definitive Guide, §13.2.5).
 
 ---
 
@@ -510,7 +519,7 @@ const responses = await mapWithLimit(urls, 5, async (url) => {
 const responses = await Promise.all(urls.map((url) => fetch(url)));
 ```
 
-**Rationale**: `Promise.all(items.map(fn))` starts all operations immediately. For large sets or expensive I/O (network, file system), this can exhaust connections, trigger rate limits, or cause memory pressure. A worker-pool pattern limits concurrency to N simultaneous operations (Exploring JS Ch. 43).
+**Rationale**: `Promise.all(items.map(fn))` starts all operations immediately. For large sets or expensive I/O (network, file system), this can exhaust connections, trigger rate limits, or cause memory pressure. A worker-pool pattern limits concurrency to N simultaneous operations. Note: the shared mutable `nextIndex` is safe because of run-to-completion (ID-01) — `nextIndex++` cannot be interrupted between read and increment within a single task (Exploring JS Ch. 43).
 
 ---
 
@@ -662,10 +671,16 @@ console.log(results[0]); // Promise { <pending> }
 
 **Strength**: CONSIDER
 
-**Summary**: There is no built-in `Array.fromAsync()` that is widely supported. Use a manual helper.
+**Summary**: Use `Array.fromAsync()` (ES2024) to collect an async iterable into an array.
 
 ```js
-// Good — manual collection
+// Good — Array.fromAsync() (ES2024, supported in Deno)
+const allItems = await Array.fromAsync(paginatedFetch("/api/records"));
+
+// Good — with mapping function (like Array.from's second argument)
+const names = await Array.fromAsync(userStream, (user) => user.name);
+
+// Fallback — manual collection (for environments without Array.fromAsync)
 async function toArray(asyncIterable) {
   const result = [];
   for await (const item of asyncIterable) {
@@ -673,14 +688,9 @@ async function toArray(asyncIterable) {
   }
   return result;
 }
-
-const allItems = await toArray(paginatedFetch("/api/records"));
-
-// Note: Array.fromAsync() is an ES2024 proposal
-// When available: const items = await Array.fromAsync(asyncIterable);
 ```
 
-**Rationale**: Spread (`[...asyncIterable]`) and `Array.from()` do not work with async iterables. A manual helper is required until `Array.fromAsync()` has broad support (Exploring JS Ch. 44).
+**Rationale**: Spread (`[...asyncIterable]`) and `Array.from()` do not work with async iterables. `Array.fromAsync()` shipped in ES2024 and is supported in Deno — it is the standard approach. It accepts an optional mapping function as a second argument, mirroring `Array.from()` (Exploring JS Ch. 44).
 
 ---
 
@@ -814,7 +824,9 @@ const signal = AbortSignal.any([
 const data = await fetch("/api/data", { signal });
 ```
 
-**Rationale**: `AbortSignal.timeout()` replaces the `Promise.race()` + `setTimeout` timeout pattern (ID-16) with a cleaner, more composable API. It works with any API that accepts a signal, not just Promises. `AbortSignal.any()` combines multiple cancellation sources.
+**`AbortSignal.any()`** creates a derived signal that aborts when **any** of its input signals abort. This enables composing multiple cancellation sources — a manual abort button, a timeout, and a navigation event can all feed into one signal that cancels the operation when any trigger fires.
+
+**Rationale**: `AbortSignal.timeout()` replaces the `Promise.race()` + `setTimeout` timeout pattern (ID-16) with a cleaner, more composable API. It works with any API that accepts a signal, not just Promises. Combined with `AbortSignal.any()`, multiple cancellation sources compose into a single signal.
 
 ---
 
@@ -933,6 +945,7 @@ const stream = new ReadableStream({
 // main.js — spawn a worker
 const worker = new Worker(new URL("./worker.js", import.meta.url).href, {
   type: "module",
+  deno: { permissions: "inherit" }, // explicit: inherit parent's permissions
 });
 
 worker.postMessage({ data: largeDataSet });
@@ -951,7 +964,7 @@ self.addEventListener("message", async (event) => {
 - Workers run in an isolated environment — no shared variables, no DOM
 - Communication via `postMessage` using structured clone (deep copy)
 - `Transferable` objects (typed arrays, `MessagePort`) can be zero-copy transferred
-- In Deno, Workers must use `type: "module"` and inherit parent permissions by default
+- In Deno, Workers must use `type: "module"`. By default, Workers get **no permissions** — you must explicitly grant them via the `deno.permissions` option (`"inherit"` to match parent, or a specific permission object)
 
 **When to use Workers**: Image processing, data parsing, cryptography, any computation >50ms that would freeze the event loop. Not a replacement for async I/O patterns.
 
@@ -1039,8 +1052,6 @@ document.addEventListener("mousemove", (e) => trackMouse(e.pageX, e.pageY));
 
 ---
 
----
-
 ## Best Practices Summary
 
 ### Quick Reference Table
@@ -1062,13 +1073,13 @@ document.addEventListener("mousemove", (e) => trackMouse(e.pageX, e.pageY));
 | 13 | `Promise.all()` for parallel | MUST | Fork-join; short-circuits on first rejection |
 | 14 | `Promise.allSettled()` | SHOULD | Partial success; never rejects → see 03 ID-16 |
 | 15 | `Promise.any()` | CONSIDER | First success; AggregateError on total failure → see 03 ID-17 |
-| 16 | `Promise.race()` for timeouts | SHOULD | First settlement; combine with AbortController |
+| 16 | `Promise.race()` for first-settlement | SHOULD | First-response-wins; for timeouts prefer ID-26 |
 | 17 | Concurrency limiting | SHOULD | N-at-a-time worker pool; don't blast all at once |
 | 18 | Sequential async with `for-of` | SHOULD | `await` inside loop pauses between iterations |
 | 19 | `for await...of` | SHOULD | Consumes async iterables with natural backpressure |
 | 20 | Async generators | SHOULD | `async function*` combines `await` + `yield` |
 | 21 | `Promise.all(items.map(async fn))` | MUST | `.map()` returns `Promise[]`; must wrap with `all()` |
-| 22 | Async iterable to array | CONSIDER | Manual helper needed; no built-in yet |
+| 22 | Async iterable to array | CONSIDER | `Array.fromAsync()` (ES2024, supported in Deno) |
 | 23 | `AbortController` / `AbortSignal` | SHOULD | Web Platform cancellation standard |
 | 24 | Pass `signal` to `fetch()` | MUST | Every production fetch needs a signal |
 | 25 | Check `signal.aborted` in loops | SHOULD | Cooperative cancellation for custom async loops |
