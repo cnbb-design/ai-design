@@ -241,13 +241,13 @@ export default function formatDate(d) { /* ... */ }
 **Summary**: Use ECMAScript modules exclusively. Never use `require()`, `module.exports`, or `exports`.
 
 ```js
-// Good — ESM
-import { readFile } from "node:fs/promises";
+// Good — ESM with Deno APIs
+const data = await Deno.readTextFile("./config.json");
 import { formatDate } from "./utils.js";
 
 export function processData(input) { /* ... */ }
 
-// Bad — CommonJS
+// Bad — CommonJS / Node.js
 const { readFile } = require("fs/promises");
 module.exports = { processData };
 ```
@@ -807,6 +807,100 @@ class Store {
 
 ---
 
+## ID-25: Prefer `for-of` over `.forEach()`
+
+**Strength**: SHOULD
+
+**Summary**: Use `for-of` for iteration. Reserve `.forEach()` only when its specific sparse-array behavior is needed.
+
+```js
+// Good — for-of: supports break, continue, await, return
+for (const item of items) {
+  if (item.skip) continue;
+  if (item.done) break;
+  process(item);
+}
+
+// Good — for-of with index via .entries()
+for (const [i, item] of items.entries()) {
+  console.log(`${i}: ${item}`);
+}
+
+// Bad — forEach: no break, no continue, no await, no return-from-function
+items.forEach((item) => {
+  if (item.done) return; // only exits the callback, not the enclosing function
+  process(item);
+});
+
+// Bad — forEach with async (fires all callbacks concurrently, does not await)
+items.forEach(async (item) => {
+  await process(item); // does NOT execute sequentially
+});
+
+// Good — for-of with async (sequential execution)
+for (const item of items) {
+  await process(item);
+}
+```
+
+**When `.forEach()` is acceptable**: When iterating a sparse array and you want nonexistent elements silently skipped (`.forEach()` skips gaps; `for-of` yields `undefined` for them).
+
+**Rationale**: `for-of` is a statement, not a method call — it supports `break`, `continue`, `return`, `await`, and labeled loops. `.forEach()` cannot be terminated early (`break` is a syntax error, `return` only exits the callback), does not support `await` correctly, and adds a function scope that obscures control flow. Flanagan: "forEach() does not provide a way to terminate iteration before all elements have been passed to the function" (JS Definitive Guide, §7.8.1). Rauschmayer recommends `for-of` as the primary iteration construct (Exploring JS Ch. 34).
+
+---
+
+## ID-26: Prefer Early Returns to Reduce Nesting
+
+**Strength**: SHOULD
+
+**Summary**: Use guard clauses with early `return`, `throw`, or `continue` to handle edge cases at the top, keeping the main logic at a low nesting level.
+
+```js
+// Good — guard clauses, flat main logic
+function processUser(user) {
+  if (!user) throw new Error("user is required");
+  if (!user.active) return null;
+  if (!user.email) return null;
+
+  const normalized = user.email.toLowerCase();
+  return sendWelcome(normalized);
+}
+
+// Bad — deeply nested conditionals
+function processUser(user) {
+  if (user) {
+    if (user.active) {
+      if (user.email) {
+        const normalized = user.email.toLowerCase();
+        return sendWelcome(normalized);
+      }
+    }
+  }
+  return null;
+}
+
+// Good — continue as guard in loops
+for (const item of items) {
+  if (!item.valid) continue;
+  if (item.processed) continue;
+
+  processItem(item);
+}
+
+// Bad — nested conditions in loop body
+for (const item of items) {
+  if (item.valid) {
+    if (!item.processed) {
+      processItem(item);
+    }
+  }
+}
+```
+
+**Rationale**: Each level of nesting increases cognitive load. Guard clauses invert conditions and exit early, leaving the "happy path" at the top level of indentation. This makes functions easier to scan — the preconditions are listed at the top, and the main logic reads linearly without rightward drift. Haverbeke emphasizes that "control flow functions as 'guard' for the code that comes after them" (Eloquent JS Ch. 1, 8). Flanagan's coverage of `break`, `continue`, and `return` supports using them for early exit (JS Definitive Guide, §5.5).
+
+---
+
 ---
 
 ## Best Practices Summary
@@ -839,6 +933,8 @@ class Store {
 | 22 | Careful truthiness checks | SHOULD | `0`, `""`, `false` are falsy but often valid |
 | 23 | `structuredClone()` for deep copies | SHOULD | Handles circular refs, Date, Map, Set |
 | 24 | Avoid shared mutable state | SHOULD | Defensive copy, non-destructive update, or freeze |
+| 25 | `for-of` over `.forEach()` | SHOULD | `for-of` supports `break`, `continue`, `await`, `return` |
+| 26 | Early returns to reduce nesting | SHOULD | Guard clauses keep the happy path flat and scannable |
 
 ---
 
