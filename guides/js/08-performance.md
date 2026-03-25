@@ -41,23 +41,28 @@ console.log(`processData: ${elapsed.toFixed(2)}ms`);
 
 ```js
 // bench.js — run with: deno bench bench.js
+
+// Create data outside the bench function to measure lookup, not allocation
+const map = new Map([["a", 1], ["b", 2], ["c", 3]]);
+const obj = { a: 1, b: 2, c: 3 };
+
 Deno.bench("Map lookup", () => {
-  const map = new Map([["a", 1], ["b", 2], ["c", 3]]);
   map.get("b");
 });
 
 Deno.bench("Object lookup", () => {
-  const obj = { a: 1, b: 2, c: 3 };
   obj.b;
 });
 
 // Group related benchmarks
+const memberSet = new Set([1, 2, 3, 4, 5]);
+const memberArr = [1, 2, 3, 4, 5];
+
 Deno.bench({
   name: "Set.has()",
   group: "membership",
   fn() {
-    const s = new Set([1, 2, 3, 4, 5]);
-    s.has(3);
+    memberSet.has(3);
   },
 });
 
@@ -84,9 +89,9 @@ Deno.bench({
 
 ```js
 // Good — timing a specific operation
-function loadAndProcess(path) {
+async function loadAndProcess(path) {
   const t0 = performance.now();
-  const raw = Deno.readTextFileSync(path);
+  const raw = await Deno.readTextFile(path);
   const t1 = performance.now();
   const result = processData(raw);
   const t2 = performance.now();
@@ -320,6 +325,9 @@ class FastQueue {
   enqueue(item) { this.#data.push(item); }
   dequeue() { return this.#data[this.#head++]; }
   get size() { return this.#data.length - this.#head; }
+  // Note: for production use, periodically compact with
+  // this.#data = this.#data.slice(this.#head); this.#head = 0;
+  // to prevent unbounded memory growth from the abandoned head portion
 }
 ```
 
@@ -368,21 +376,21 @@ const result = items
   .filter((x) => x.active)
   .map((x) => x.name);
 
-// One pass, one allocation
+// One pass, readable — but allocates a small array per element
 const result = items.flatMap((x) =>
   x.active ? [x.name] : [],
 );
 
-// Also one pass — reduce to accumulate
+// One pass, one allocation — genuinely minimal allocations
 const result = items.reduce((acc, x) => {
   if (x.active) acc.push(x.name);
   return acc;
 }, []);
 ```
 
-**When it matters**: Only for large arrays in hot paths. For typical arrays (< 1000 elements), the `.filter().map()` chain is clearer and the allocation cost is negligible. Readability trumps micro-optimization unless profiling shows otherwise.
+**Trade-off note**: `.flatMap()` is one pass but allocates a `[value]` or `[]` array per element — it is the readability winner for combined filter+transform, not necessarily the allocation winner. `.reduce()` with a single accumulator array is the true minimal-allocation approach. For typical arrays (< 1000 elements), `.filter().map()` is clearest and the allocation cost is negligible.
 
-**Rationale**: `.flatMap()` applies the callback and flattens in a single pass — it's the standard replacement for `.filter().map()` when both are needed. The readability of `.filter().map()` is often worth the extra allocation (Exploring JS Ch. 34; JS Definitive Guide, §7.8.2).
+**Rationale**: `.flatMap()` applies the callback and flattens in a single pass — it's readable and avoids the intermediate filtered array. `.reduce()` is the lowest-allocation option when that matters. The readability of `.filter().map()` is often worth the extra allocation (Exploring JS Ch. 34; JS Definitive Guide, §7.8.2).
 
 ---
 
@@ -449,7 +457,7 @@ const result = hugeDataSet.filter(isValid).map(transform).slice(0, 5);
 
 **Strength**: CONSIDER
 
-**Summary**: ES2025 iterator helpers (`.map()`, `.filter()`, `.take()`, `.drop()`) add lazy pipeline support to all iterators.
+**Summary**: ES2025 iterator helpers (`.map()`, `.filter()`, `.take()`, `.drop()`) add lazy pipeline support to all iterators. Supported in Deno — verify with `deno eval "[1,2,3].values().map(x=>x*2).toArray()"` if unsure.
 
 ```js
 // Good — lazy pipeline on any iterable, no intermediate arrays
@@ -561,7 +569,7 @@ const p = { x: 0, y: 0 };
 p.z = 0; // shape mutation
 ```
 
-**Rationale**: Engines assign objects internal "hidden classes" (V8) or "shapes" based on which properties exist and in what order. Objects sharing the same shape share optimized compiled code and inline caches. Divergent shapes cause deoptimization. The fix is simple: always initialize all properties, using default values for optional ones (Deep JS Ch. 10; JS Definitive Guide, §6.1).
+**Rationale**: Engines optimize objects with consistent property structures — objects that always have the same properties in the same order share compiled code and fast property access paths. Divergent structures cause the engine to fall back to slower generic paths. The fix is simple: always initialize all properties, using default values for optional ones (Deep JS Ch. 10; JS Definitive Guide, §6.1).
 
 ---
 
@@ -582,7 +590,7 @@ obj.temp = undefined;
 const { temp, ...clean } = obj;
 ```
 
-**Rationale**: `delete` forces the engine to transition the object to a different hidden class, potentially falling back to a slower dictionary-mode representation. Setting to `undefined` preserves the shape. Destructuring with rest creates a clean new object (Deep JS Ch. 8, 10).
+**Rationale**: `delete` forces the engine to transition the object to a different internal structure, potentially falling back to a slower dictionary-mode representation. Setting to `undefined` preserves the structure. Destructuring with rest creates a clean new object (Deep JS Ch. 8, 10).
 
 **See also**: `04-values-references.md` ID-14
 
@@ -595,25 +603,21 @@ const { temp, ...clean } = obj;
 **Summary**: Property lookup walks the prototype chain. In hot loops, cache inherited or deeply nested values in a local variable.
 
 ```js
-// Good — cache before the loop
-const { sqrt, floor } = Math;
-for (let i = 0; i < data.length; i++) {
-  out[i] = floor(sqrt(data[i]));
-}
-
-// Less efficient — Math.sqrt and Math.floor looked up on every iteration
-for (let i = 0; i < data.length; i++) {
-  out[i] = Math.floor(Math.sqrt(data[i]));
-}
-
-// Good — cache nested property
+// Good — cache deeply nested property before the loop
 const transform = config.pipeline.transform;
 for (const item of items) {
   result.push(transform(item));
 }
+
+// Bad — deeply nested lookup on every iteration
+for (const item of items) {
+  result.push(config.pipeline.transform(item)); // 3-level chain per iteration
+}
 ```
 
-**Rationale**: Property lookup traverses the prototype chain outward until the name is found. Local variables are resolved in one step. Modern engines use inline caches to optimize stable lookups, but caching in a local remains a reliable optimization for interpreter-mode and megamorphic call sites (Deep JS Ch. 4, 5).
+**Note on built-in lookups**: Caching `Math.sqrt` or `Math.floor` into locals is a frequently cited optimization, but modern engines inline-cache these stable built-in lookups aggressively — the benefit is minimal. The pattern genuinely helps for deeply nested property chains (like `config.pipeline.transform`) and dynamically resolved properties where inline caches miss.
+
+**Rationale**: Property lookup traverses the prototype chain outward until the name is found. Local variables are resolved in one step. For stable built-in lookups, engines already optimize this. For deep chains and dynamic property access, local caching is a reliable win (Deep JS Ch. 4, 5).
 
 ---
 
@@ -723,19 +727,21 @@ for (const item of items) {
   const result = process(options);
 }
 
-// Bad — regex created inside loop
+// Bad — regex created inside loop AND .match() allocates a result array
 for (const line of lines) {
-  if (line.match(/^ERROR:/)) errorCount++;
+  if (line.match(/^ERROR:/)) errorCount++; // allocates regex + match result array
 }
 
-// Good — regex hoisted
+// Good — regex hoisted AND .test() returns boolean (no array allocation)
 const errorPattern = /^ERROR:/;
 for (const line of lines) {
-  if (errorPattern.test(line)) errorCount++;
+  if (errorPattern.test(line)) errorCount++; // no allocation per iteration
 }
 ```
 
-**Rationale**: Every object literal, array literal, regex literal, and spread inside a loop allocates. The allocations themselves are fast, but they create GC pressure that compounds in hot loops. Hoist invariant allocations above the loop (Exploring JS Ch. 34).
+**Two wins in the regex example**: (1) Hoisting the regex avoids creating a new `RegExp` on each iteration (though engines may intern regex literals). (2) Switching from `.match()` (which allocates a result array) to `.test()` (which returns a boolean) eliminates per-iteration allocation — this is often the bigger win.
+
+**Rationale**: Every object literal, array literal, regex literal, and spread inside a loop allocates. The allocations themselves are fast, but they create GC pressure that compounds in hot loops. Hoist invariant allocations above the loop. Prefer `.test()` over `.match()` when you only need a boolean (Exploring JS Ch. 34).
 
 ---
 
@@ -809,14 +815,13 @@ for (const particle of particles) {
 **Summary**: Cache results of expensive computations keyed by their arguments.
 
 ```js
-// Good — memoization with Map
+// Good — single-argument memoization (most common case, simplest and fastest)
 function memoize(fn) {
   const cache = new Map();
-  return function (...args) {
-    const key = JSON.stringify(args);
-    if (cache.has(key)) return cache.get(key);
-    const result = fn.apply(this, args);
-    cache.set(key, result);
+  return function (arg) {
+    if (cache.has(arg)) return cache.get(arg);
+    const result = fn.call(this, arg);
+    cache.set(arg, result);
     return result;
   };
 }
@@ -829,9 +834,21 @@ const expensiveCalc = memoize((n) => {
 
 expensiveCalc(1_000_000); // computed
 expensiveCalc(1_000_000); // cached
+
+// Multi-argument fallback — JSON.stringify as key
+function memoizeMulti(fn) {
+  const cache = new Map();
+  return function (...args) {
+    const key = JSON.stringify(args);
+    if (cache.has(key)) return cache.get(key);
+    const result = fn.apply(this, args);
+    cache.set(key, result);
+    return result;
+  };
+}
 ```
 
-**Requirements**: The function must be pure (same input → same output, no side effects). The key strategy must correctly distinguish different argument sets — `JSON.stringify` works for primitives but fails for object arguments.
+**Requirements**: The function must be pure (same input → same output, no side effects). For single-argument functions with primitive args, `cache.has(arg)` is both faster and more correct than `JSON.stringify`. The `JSON.stringify` key strategy works for multi-arg primitives but fails for object arguments (all produce `"[object Object]"`), `undefined` (silently omitted by JSON), and functions.
 
 **Rationale**: Memoization is a memory-for-speed trade-off. It is most effective for expensive computations called repeatedly with the same arguments. The closure holds the cache privately (JS Definitive Guide, §8.8.4; Exploring JS Ch. 13).
 
@@ -1043,8 +1060,6 @@ for (const item of largeArray) {
 ```
 
 **Rationale**: Rauschmayer explicitly notes: "Proxies slow down code; performance may be a consideration." Even an empty handler (transparent proxy) adds indirection. Proxy invariant checking is also not free. Use Proxies for development tooling, validation boundaries, and infrequently accessed paths — not inner loops (Deep JS Ch. 20; JS Definitive Guide, §14.7).
-
----
 
 ---
 
