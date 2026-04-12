@@ -6,12 +6,13 @@ description: |
   designing module APIs, handling errors, writing Deno tests, configuring deno.json
   tasks, preparing modules for JSR publishing, converting Node-style or TypeScript-style
   code to project idioms, doing code quality audits, performance reviews, improving
-  documentation, making dependency decisions, or answering JS design questions.
+  documentation, making dependency decisions, configuring Biome lint/format, enforcing
+  the no-Node boundary, or answering JS design questions.
 ---
 
 # JavaScript Skill — Project Style Reference
 
-This project writes **plain JavaScript** (no TypeScript) targeting **Deno** with **ESM-only** modules, **Biome** for linting/formatting, and **JSDoc** for type annotations. Every rule below is derived from the project's style guides (01-12). When writing or reviewing JS for this project, follow these conventions.
+This project writes **plain JavaScript** (no TypeScript) targeting **Deno** with **ESM-only** modules, **Biome** for linting/formatting, and **JSDoc** for type annotations. Every rule below is derived from the project's style guides (01–14). When writing or reviewing JS for this project, follow these conventions.
 
 **Strength indicators** used throughout:
 
@@ -46,11 +47,12 @@ Note: document paths in this skill are relative to the project root. (The projec
 | **Dependency decisions** | `guides/js/10-project-structure.md`, `guides/js/12-deno/12-01-runtime-basics.md` |
 | **Task runner / deno.json** | `guides/js/12-deno/12-03-task-runner.md` |
 | **Publishing to JSR** | `guides/js/12-deno/12-04-publishing.md`, `guides/js/11-documentation.md`, `guides/js/05-type-discipline.md` |
-| **Converting Node/TS code** | `guides/js/12-deno/12-01-runtime-basics.md`, `guides/js/01-core-idioms.md`, `guides/js/14-no-node-boundary.md` *(not yet written — see interim rules below)* |
+| **Converting Node/TS code** | `guides/js/12-deno/12-01-runtime-basics.md`, `guides/js/01-core-idioms.md`, `guides/js/14-no-node-boundary.md` |
+| **Enforcing the no-Node boundary** | `guides/js/14-no-node-boundary.md`, `guides/js/12-deno/12-01-runtime-basics.md` |
 | **Async & concurrency** | `guides/js/07-async-concurrency.md`, `guides/js/03-error-handling.md` |
 | **Values, mutation, copying** | `guides/js/04-values-references.md`, `guides/js/01-core-idioms.md` |
 | **Type discipline / JSDoc** | `guides/js/05-type-discipline.md`, `guides/js/11-documentation.md` |
-| **Biome lint/format** | `guides/js/13-biome/` *(not yet written — see interim rules below)* |
+| **Biome lint/format** | `guides/js/13-biome/13-01-setup.md`, `guides/js/13-biome/13-02-lint-rules.md`, `guides/js/13-biome/13-03-formatting.md` |
 
 ---
 
@@ -539,23 +541,120 @@ Required `deno.json` fields:
 
 ## Biome (Linting & Formatting)
 
-> **TODO**: Guides 13-01 through 13-03 (Biome setup, lint rules, formatting) are not yet written. When available, add:
-> - Biome setup and `biome.json` configuration
-> - Project-specific lint rule selections and overrides
-> - Formatting preferences and integration with `deno task`
+Biome replaces ESLint + Prettier with a single Rust-based binary — one tool, one config file, one pass.
 
-Current usage: `biome ci` for CI checks, `biome check --write` for auto-fix, `biome format --write` for formatting.
+### Setup & Config
+
+- **Install standalone** (no npm required): `brew install biome` or the install script. **MUST**
+- **`biome.json`** at project root is the single config file. Use `biome init` to scaffold. **MUST**
+- **Omit `lint` and `fmt` from `deno.json`** when using Biome — avoids conflicts. **MUST**
+- **Division of labor**: Biome handles lint/format. Deno handles type checking (`deno check`), testing (`deno test`), and running. **SHOULD**
+- **VS Code**: Install `biomejs.biome` extension, set `"deno.lint": false`, set Biome as default formatter with format-on-save. **SHOULD**
+- **VCS integration**: Enable `vcs.enabled`, `vcs.useIgnoreFile`, `vcs.clientKind: "git"` in `biome.json`. **SHOULD**
+
+```jsonc
+// biome.json — recommended starter
+{
+  "$schema": "https://biomejs.dev/schemas/2.0.0/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true, "defaultBranch": "main" },
+  "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "semicolons": "always", "trailingCommas": "all" }
+  },
+  "linter": { "enabled": true, "rules": { "recommended": true } }
+}
+```
+
+### CLI Commands
+
+| Command | Purpose |
+|---------|---------|
+| `biome check` | Lint + format check (report only) |
+| `biome check --write` | Lint fix + format (modify files) |
+| `biome check --staged` | Check staged files only (pre-commit) |
+| `biome check --changed` | Check files changed from default branch |
+| `biome ci` | CI mode — errors on all violations, never modifies files |
+| `biome format --write` | Format only |
+| `biome lint --write` | Lint + safe fixes only |
+
+### Lint Rules
+
+- **`recommended` rules on by default** — stable, sensible baseline across all groups. **MUST**
+- **Rule groups**: `correctness` (error), `suspicious` (error), `style` (warn), `complexity` (warn), `performance` (error), `security` (error), `a11y` (error). **SHOULD**
+- **Key rules**: `noDoubleEquals` (MUST), `noVar` (MUST), `useConst` (SHOULD), `noUnusedVariables`/`noUnusedImports` (SHOULD).
+- **Severity**: `"error"` blocks CI, `"warn"` is advisory, `"off"` disables. **SHOULD**
+- **`types` domain**: Enable for type-aware rules (`noFloatingPromises`, `useAwaitThenable`). Requires JSDoc + `checkJs`. **SHOULD**
+- **`project` domain**: Enable for cross-file analysis (`noImportCycles`, `noUndeclaredDependencies`). **CONSIDER**
+- **Safe fixes** (`--write`): Never change semantics — auto-apply freely. **SHOULD**
+- **Unsafe fixes** (`--write --unsafe`): May change semantics — review required. **SHOULD**
+- **Suppression**: `// biome-ignore lint/group/rule: reason` — reason is mandatory. **MUST**
+
+### Formatting
+
+- **Opinionated formatter** — minimal options by design. Configure once, never discuss formatting in review.
+- **Project settings**: spaces, indent 2, line width 100, double quotes, always semicolons, trailing commas all.
+- **JS-specific options** go under `javascript.formatter`, not top-level `formatter`. **MUST**
+- **97%+ Prettier compatible** — migration produces minimal diffs.
+- **Format suppression**: `// biome-ignore format: reason` — for alignment tables, matrix data, generated code. **SHOULD**
+
+### Integration with `deno task`
+
+```jsonc
+{
+  "tasks": {
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "fmt": "biome format --write",
+    "check": "biome ci && deno check **/*.js && deno test --allow-all",
+    "ci": "biome ci && deno check **/*.js && deno test --allow-all --parallel"
+  }
+}
+```
 
 ---
 
 ## No-Node Boundary
 
-> **TODO**: Guide 14 (`14-no-node-boundary.md`) is not yet written. When available, add:
-> - Rationale for avoiding Node.js tooling entirely
-> - Specific Node patterns to reject and their Deno replacements
-> - Migration patterns for converting Node-style code to project idioms
+This project avoids Node.js patterns entirely. Every Node.js API has a Deno or Web Platform replacement. When encountering Node.js code (or about to emit it), consult this boundary.
 
-Current rule: no `package.json`, no `node_modules`, no `npm` scripts, no CommonJS. Use Deno APIs and Web Platform APIs. `node:` specifiers only when an npm dependency requires them.
+### MUST-AVOID (Hard Boundary)
+
+| Node.js Pattern | Deno Replacement |
+|----------------|-----------------|
+| `require()` | ESM `import` with explicit `.js` extension |
+| `module.exports` / `exports` | ESM `export` |
+| Extensionless imports | Explicit `.js` extension on all local imports |
+| `package.json` | `deno.json` (imports, tasks, compilerOptions) |
+| `node_modules` | Global cache via `jsr:` and `npm:` specifiers |
+| `npm install` / `npm run` | `deno add` / `deno task` |
+| `.eslintrc` / `.prettierrc` | `biome.json` |
+| `tsconfig.json` | `compilerOptions` in `deno.json` |
+| Error-first callbacks `(err, result)` | `async`/`await` |
+| Jest / Mocha / Vitest | `Deno.test()` + `@std/assert` |
+| ESLint / Prettier | Biome |
+
+### SHOULD-AVOID (Prefer Deno/Web APIs)
+
+| Node.js Pattern | Deno Replacement |
+|----------------|-----------------|
+| `process.env.X` | `Deno.env.get("X")` |
+| `process.argv.slice(2)` | `Deno.args` |
+| `__dirname` / `__filename` | `import.meta.dirname` / `import.meta.filename` |
+| `Buffer` | `Uint8Array` + `TextEncoder`/`TextDecoder` |
+| `fs.readFile` / `fs.writeFile` | `Deno.readTextFile` / `Deno.writeTextFile` |
+| `http.createServer` | `Deno.serve()` |
+| `child_process.exec` | `Deno.Command` |
+| Node streams (`Readable`/`Writable`) | Web Streams (`ReadableStream`/`WritableStream`) |
+| `EventEmitter` | `EventTarget` + `CustomEvent` |
+| `process.nextTick` | `queueMicrotask()` |
+| `index.js` convention | `mod.js` |
+| `npx tool` | `deno run npm:tool` |
+
+### CONSIDER-AVOIDING (Acceptable Escape Hatches)
+
+- **`npm:` specifiers**: Acceptable when no JSR equivalent exists. Prefer `jsr:` when available. **CONSIDER**
+- **`node:` built-in specifiers**: Available for compat. Prefer Deno/Web APIs for new code. Acceptable inside npm dependencies. **CONSIDER**
+- **`nodeModulesDir: "auto"`**: Last resort for frameworks (Vite, Next.js) or native addons that require local `node_modules`. **CONSIDER**
 
 ---
 
@@ -617,6 +716,37 @@ Current rule: no `package.json`, no `node_modules`, no `npm` scripts, no CommonJ
    - `shared/` for cross-cutting concerns, `testing/` for test helpers
    - JSR import map entries: `"@std/assert": "jsr:@std/assert@^1"` etc.
    - `if (import.meta.main) { main(); }` guard in application entry point
+
+### Task: "Set up Biome linting and formatting for an existing project"
+
+1. **Load**: `guides/js/13-biome/13-01-setup.md`, `guides/js/13-biome/13-02-lint-rules.md`, `guides/js/13-biome/13-03-formatting.md`
+2. **Apply**:
+   - Install Biome standalone (`brew install biome`), not via npm
+   - Run `biome init` to scaffold `biome.json`
+   - Configure: spaces, indent 2, line width 100, double quotes, always semicolons, trailing commas all
+   - Enable VCS integration with `useIgnoreFile: true`
+   - Remove `lint` and `fmt` fields from `deno.json`
+   - Wire into `deno task`: `lint`, `lint:fix`, `fmt`, `check`, `ci`
+   - VS Code: install `biomejs.biome`, set `"deno.lint": false`, configure format-on-save
+   - Enable `types` domain if project has JSDoc coverage
+   - Run `biome ci` to validate — fix all violations before committing
+
+### Task: "Migrate a Node.js codebase to Deno project idioms"
+
+1. **Load**: `guides/js/14-no-node-boundary.md`, `guides/js/12-deno/12-01-runtime-basics.md`, `guides/js/01-core-idioms.md`, `guides/js/09-anti-patterns.md`
+2. **Apply**:
+   - Replace `package.json` → `deno.json` with `imports`, `tasks`, `compilerOptions`
+   - Replace `require()` → `import` with explicit `.js` extensions
+   - Replace `module.exports` → ESM `export`
+   - Replace `index.js` → `mod.js` entry points
+   - Replace `process.env` → `Deno.env.get()`, `__dirname` → `import.meta.dirname`
+   - Replace `fs.readFile` → `Deno.readTextFile`, `http.createServer` → `Deno.serve()`
+   - Replace `Buffer` → `Uint8Array` + `TextEncoder`/`TextDecoder`
+   - Replace Node streams → Web Streams (`ReadableStream`/`WritableStream`)
+   - Replace Jest/Mocha → `Deno.test()` + `@std/assert`
+   - Replace ESLint + Prettier → Biome (`biome.json`)
+   - Use `npm:` specifiers for npm packages with no JSR equivalent
+   - Fix `||` → `??`, `var` → `const`/`let`, `==` → `===`
 
 ### Task: "Performance review of an async data pipeline"
 
