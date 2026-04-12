@@ -291,19 +291,9 @@ class C { [x = 0] = 1; }
 ```
 *Biome's position*: Consistency across similar constructs.
 
-**Divergence 3 — Trailing commas on arrow function type parameters** (TypeScript only):
-```tsx
-// Prettier: <T = unknown,>() => {};
-// Biome:    <T = unknown>() => {};
-```
+Two additional divergences affect **TypeScript only** (trailing commas on arrow type parameters, non-null-asserted optional chains) — irrelevant for this plain-JS project. See the [Biome Prettier divergences docs](https://biomejs.dev/formatter/differences-with-prettier/) for details.
 
-**Divergence 4 — Non-null-asserted optional chains** (TypeScript only):
-```ts
-// Prettier: (a?.b)!
-// Biome:    a?.b!
-```
-
-**Rationale**: These divergences are small, intentional, and documented. During migration, expect them in diffs — they are not bugs. Divergences 3 and 4 only affect TypeScript code and are irrelevant for this plain-JS project (Biome Prettier divergences docs).
+**Rationale**: These divergences are small, intentional, and documented. During migration, expect divergences 1 and 2 in JS diffs — they are not bugs (Biome Prettier divergences docs).
 
 ---
 
@@ -341,7 +331,7 @@ const routes = [
 
 **Rationale**: Suppressed code is printed verbatim. Use for alignment tables, matrix data, ASCII art, and generated files where Biome's reformatting destroys meaningful structure. The mandatory reason connects to Guide 11's documentation discipline (Biome format suppression docs).
 
-**See also**: `13-biome/13-02-lint-rules.md` ID-18 (lint suppression uses the same syntax)
+**See also**: `13-biome/02-lint-rules.md` ID-18 (lint suppression uses the same syntax)
 
 ---
 
@@ -449,7 +439,7 @@ const routes = [
 ## Related Guidelines
 
 - **Biome Setup**: See `13-biome/01-setup.md` for `biome.json` creation (ID-06), `biome format` command (ID-13), editor format-on-save (ID-15), Prettier migration (ID-21)
-- **Biome Lint Rules**: See `13-biome/13-02-lint-rules.md` for suppression syntax (ID-18–20) — same `biome-ignore` pattern
+- **Biome Lint Rules**: See `13-biome/02-lint-rules.md` for suppression syntax (ID-18–20) — same `biome-ignore` pattern
 - **Task Runner**: See `12-deno/03-task-runner.md` for `biome ci` in the `check` task (ID-07, ID-08)
 - **Documentation**: See `11-documentation.md` for "comments explain why" (ID-01) — connects to mandatory suppression reasons
 
